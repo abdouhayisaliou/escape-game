@@ -3,6 +3,8 @@ import time
 import network
 import socket
 import random
+from machine import PWM
+
 
 # =========================================================
 # CONFIGURATION
@@ -128,38 +130,77 @@ class LED:
 # =========================================================
 # BUZZER
 # =========================================================
-
 class Buzzer:
     def __init__(self):
-        self.pin = machine.Pin(BUZZER_PIN, machine.Pin.OUT)
-        self.off()
+        self.speaker = machine.PWM(machine.Pin(BUZZER_PIN))
+        self.speaker.duty(0)
 
-    def off(self):
-        self.pin.value(0)
-
-    def beep(self, duration):
-        self.pin.value(1)
+    def tone(self, freq, duration, volume=900):
+        self.speaker.freq(freq)
+        self.speaker.duty(volume)
         time.sleep(duration)
-        self.pin.value(0)
+        self.speaker.duty(0)
+        time.sleep(0.03)
+
+    def melody(self, notes, volume=900):
+        for freq, duration in notes:
+            if freq == 0:
+                self.speaker.duty(0)
+                time.sleep(duration)
+            else:
+                self.tone(freq, duration, volume)
 
     def correct(self):
-        self.beep(0.10)
-        time.sleep(0.08)
-        self.beep(0.10)
-        time.sleep(0.08)
-        self.beep(0.30)
+        # Victoire 2
+        self.melody([
+            (659, 0.08),
+            (784, 0.08),
+            (988, 0.08),
+            (1319, 0.25),
+            (1568, 0.35)
+        ])
 
     def wrong(self):
-        self.beep(0.25)
-        time.sleep(0.10)
-        self.beep(0.25)
+        # Perdu 2
+        self.melody([
+            (300, 0.25),
+            (250, 0.25),
+            (200, 0.50)
+        ])
 
     def locked(self):
-        self.beep(0.60)
+        # Son grave de verrouillage
+        self.melody([
+            (180, 0.25),
+            (0, 0.08),
+            (180, 0.25),
+            (0, 0.08),
+            (120, 0.45)
+        ])
 
     def reset(self):
-        self.beep(0.10)
+        # Alarme reset
+        self.melody([
+            (800, 0.10),
+            (400, 0.10),
+            (800, 0.10),
+            (400, 0.10),
+            (800, 0.10),
+            (400, 0.10)
+        ])
 
+    def treasure(self):
+        # Coffre au trésor / victoire finale
+        self.melody([
+            (784, 0.08),
+            (988, 0.08),
+            (1175, 0.08),
+            (1568, 0.08),
+            (1976, 0.40)
+        ])
+
+    def off(self):
+        self.speaker.duty(0)
 # =========================================================
 # GAME
 # =========================================================
