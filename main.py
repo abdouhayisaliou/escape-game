@@ -1,34 +1,49 @@
+# =========================================================
+# ESCAPE GAME - SKULL WIFI
+# ESP32-WROOM + MicroPython
+# Projet : Chasse au Trésor - La Roche-Guyon
+# Fichier unique : main.py
+# =========================================================
+
 import machine
 import time
 import network
 import socket
-import random
 from machine import PWM
 
 
 # =========================================================
-# CONFIGURATION
+# 1. CONFIGURATION GENERALE
 # =========================================================
 
 SKULL = 1
 SSID = "Skull" + str(SKULL)
 
+# LED RGB 1 - Cathode commune
 LED1_R = 18
 LED1_G = 16
 LED1_B = 17
 
+# LED RGB 2 - Cathode commune
 LED2_R = 22
 LED2_G = 21
 LED2_B = 23
 
+# Speaker passif / buzzer PWM
 BUZZER_PIN = 25
+
+# Bouton tactile TTP223
 BUTTON_PIN = 27
 
+# WiFi
 MAX_CLIENTS = 8
+
+# 1ère erreur = 30 s, 2ème = 60 s, 3ème = 120 s
 LOCK_TIMES = [30, 60, 120]
 
+
 # =========================================================
-# QUESTIONS PYTHON SELON LA CARTE
+# 2. QUESTIONS PYTHON SELON LA CARTE
 # =========================================================
 
 QUESTIONS = {
@@ -39,6 +54,7 @@ QUESTIONS = {
         "c": 0,
         "next": "Va au Crâne 2 : Carré I — Pommiers. Cherche le réseau WiFi Skull2."
     },
+
     2: {
         "place": "Carré I — Pommiers",
         "q": "ap.config(essid=SSID, authmode=0, channel=6)<br><br>Que fait authmode=0 ?",
@@ -46,6 +62,7 @@ QUESTIONS = {
         "c": 1,
         "next": "Va au Crâne 3 : Carré II — Poiriers. Cherche le réseau WiFi Skull3."
     },
+
     3: {
         "place": "Carré II — Poiriers",
         "q": "Que retourne ap.config('essid') ?",
@@ -53,6 +70,7 @@ QUESTIONS = {
         "c": 1,
         "next": "Va au Crâne 4 : Bassin Central. Cherche le réseau WiFi Skull4."
     },
+
     4: {
         "place": "Bassin Central",
         "q": "def locked(self):<br>&nbsp;&nbsp;&nbsp;&nbsp;return self.w >= 3 or time.time() < self.t<br><br>Que signifie self.w >= 3 ?",
@@ -60,6 +78,7 @@ QUESTIONS = {
         "c": 1,
         "next": "Va au Crâne 5 : Carré III — Légumes. Cherche le réseau WiFi Skull5."
     },
+
     5: {
         "place": "Carré III — Légumes",
         "q": "if 'POST' in req and 'a=' in req:<br>&nbsp;&nbsp;&nbsp;&nbsp;ans = int(req.split('a=')[1].split('&')[0])<br><br>Que parse ce code ?",
@@ -67,6 +86,7 @@ QUESTIONS = {
         "c": 1,
         "next": "Va au Crâne 6 : Carré IV — Pêchers. Cherche le réseau WiFi Skull6."
     },
+
     6: {
         "place": "Carré IV — Pêchers",
         "q": "class Game:<br>&nbsp;&nbsp;&nbsp;&nbsp;def reset(self):<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.w = 0<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.t = 0<br><br>Pourquoi reset() remet self.w à 0 ?",
@@ -74,6 +94,7 @@ QUESTIONS = {
         "c": 1,
         "next": "Va au Crâne 7 : Cabane du Jardinier. Cherche le réseau WiFi Skull7."
     },
+
     7: {
         "place": "Cabane du Jardinier",
         "q": "c.send('HTTP/1.1 200 OK...'+html)<br>c.close()<br><br>Que fait c.close() ?",
@@ -83,18 +104,41 @@ QUESTIONS = {
     }
 }
 
+
 # =========================================================
-# LED RGB DOUBLE
-# Cathode commune : 0 = ON, 1 = OFF
+# 3. GESTION DES LED RGB
+# =========================================================
+# Cathode commune :
+# value(0) = allumé
+# value(1) = éteint
+#
+# Etats :
+# Bleu fixe       = attente / crâne prêt
+# Bleu clignote   = traitement
+# Vert clignote   = bonne réponse
+# Rouge clignote  = mauvaise réponse
+# Rouge fixe      = verrouillé
+# Rouge/Bleu      = reset organisateur
+# Vert/Bleu       = victoire finale
 # =========================================================
 
 class LED:
+
     def __init__(self):
         self.leds = [
-            {"r": machine.Pin(LED1_R, machine.Pin.OUT), "g": machine.Pin(LED1_G, machine.Pin.OUT), "b": machine.Pin(LED1_B, machine.Pin.OUT)},
-            {"r": machine.Pin(LED2_R, machine.Pin.OUT), "g": machine.Pin(LED2_G, machine.Pin.OUT), "b": machine.Pin(LED2_B, machine.Pin.OUT)}
+            {
+                "r": machine.Pin(LED1_R, machine.Pin.OUT),
+                "g": machine.Pin(LED1_G, machine.Pin.OUT),
+                "b": machine.Pin(LED1_B, machine.Pin.OUT)
+            },
+            {
+                "r": machine.Pin(LED2_R, machine.Pin.OUT),
+                "g": machine.Pin(LED2_G, machine.Pin.OUT),
+                "b": machine.Pin(LED2_B, machine.Pin.OUT)
+            }
         ]
-        self.blue()
+
+        self.ready()
 
     def off(self):
         for led in self.leds:
@@ -108,29 +152,73 @@ class LED:
             led["b"].value(0)
 
     def green(self):
-        for _ in range(5):
-            self.off()
-            for led in self.leds:
-                led["g"].value(0)
-            time.sleep(0.25)
-            self.off()
-            time.sleep(0.25)
-        self.blue()
+        self.off()
+        for led in self.leds:
+            led["r"].value(0)
 
     def red(self):
-        for _ in range(3):
-            self.off()
-            for led in self.leds:
-                led["r"].value(0)
-            time.sleep(0.25)
-            self.off()
-            time.sleep(0.25)
+        self.off()
+        for led in self.leds:
+            led["g"].value(0)
+
+    def ready(self):
         self.blue()
 
+    def processing(self):
+        for _ in range(3):
+            self.blue()
+            time.sleep(0.10)
+            self.off()
+            time.sleep(0.10)
+
+        self.ready()
+
+    def correct(self):
+        for _ in range(6):
+            self.green()
+            time.sleep(0.25)
+            self.off()
+            time.sleep(0.12)
+
+        self.ready()
+
+    def wrong(self):
+        for _ in range(6):
+            self.red()
+            time.sleep(0.25)
+            self.off()
+            time.sleep(0.12)
+
+        self.ready()
+
+    def locked(self):
+        self.red()
+
+    def reset_animation(self):
+        for _ in range(6):
+            self.red()
+            time.sleep(0.12)
+            self.blue()
+            time.sleep(0.12)
+
+        self.ready()
+
+    def treasure(self):
+        for _ in range(10):
+            self.green()
+            time.sleep(0.12)
+            self.blue()
+            time.sleep(0.12)
+
+        self.green()
+
+
 # =========================================================
-# BUZZER
+# 4. GESTION DU BUZZER / SPEAKER PWM
 # =========================================================
+
 class Buzzer:
+
     def __init__(self):
         self.speaker = machine.PWM(machine.Pin(BUZZER_PIN))
         self.speaker.duty(0)
@@ -151,7 +239,6 @@ class Buzzer:
                 self.tone(freq, duration, volume)
 
     def correct(self):
-        # Victoire 2
         self.melody([
             (659, 0.08),
             (784, 0.08),
@@ -161,7 +248,6 @@ class Buzzer:
         ])
 
     def wrong(self):
-        # Perdu 2
         self.melody([
             (300, 0.25),
             (250, 0.25),
@@ -169,7 +255,6 @@ class Buzzer:
         ])
 
     def locked(self):
-        # Son grave de verrouillage
         self.melody([
             (180, 0.25),
             (0, 0.08),
@@ -179,7 +264,6 @@ class Buzzer:
         ])
 
     def reset(self):
-        # Alarme reset
         self.melody([
             (800, 0.10),
             (400, 0.10),
@@ -190,7 +274,6 @@ class Buzzer:
         ])
 
     def treasure(self):
-        # Coffre au trésor / victoire finale
         self.melody([
             (784, 0.08),
             (988, 0.08),
@@ -201,11 +284,14 @@ class Buzzer:
 
     def off(self):
         self.speaker.duty(0)
+
+
 # =========================================================
-# GAME
+# 5. LOGIQUE DU JEU
 # =========================================================
 
 class Game:
+
     def __init__(self):
         self.reset()
 
@@ -215,10 +301,12 @@ class Game:
         self.score = 0
         self.start_time = time.time()
         self.question = QUESTIONS[SKULL]
+
         print("[GAME RESET]")
 
     def wrong(self):
         self.errors += 1
+
         delay = LOCK_TIMES[min(self.errors - 1, len(LOCK_TIMES) - 1)]
         self.lock_until = time.time() + delay
 
@@ -228,13 +316,15 @@ class Game:
     def remaining(self):
         if self.errors >= 3:
             return 0
+
         return max(0, int(self.lock_until - time.time()))
 
     def elapsed(self):
         return int(time.time() - self.start_time)
 
+
 # =========================================================
-# HTML
+# 6. INTERFACE HTML
 # =========================================================
 
 def html_page(content):
@@ -243,11 +333,14 @@ def html_page(content):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <title>{}</title>
+
 <style>
 * {{
     box-sizing:border-box;
 }}
+
 body {{
     margin:0;
     min-height:100vh;
@@ -262,6 +355,7 @@ body {{
     justify-content:center;
     padding:18px;
 }}
+
 .card {{
     width:100%;
     max-width:540px;
@@ -272,6 +366,7 @@ body {{
     text-align:center;
     box-shadow:0 20px 60px rgba(0,0,0,.55);
 }}
+
 .badge {{
     display:inline-block;
     padding:8px 14px;
@@ -282,17 +377,18 @@ body {{
     font-size:13px;
     letter-spacing:1px;
 }}
+
 h1 {{
-    margin:14px 0 6px;
     color:#3a1a00;
-    font-size:28px;
 }}
+
 .place {{
     color:#6b3d10;
     font-size:15px;
     font-weight:bold;
     margin-bottom:12px;
 }}
+
 .question {{
     margin:18px 0;
     padding:18px;
@@ -302,6 +398,7 @@ h1 {{
     font-size:17px;
     line-height:1.6;
 }}
+
 button {{
     width:100%;
     padding:15px;
@@ -313,18 +410,23 @@ button {{
     font-size:16px;
     font-weight:bold;
 }}
+
 button:active {{
     transform:scale(.98);
 }}
+
 .success {{
     color:#166534;
 }}
+
 .error {{
     color:#991b1b;
 }}
+
 .locked {{
     color:#b45309;
 }}
+
 .next {{
     margin:16px 0;
     padding:16px;
@@ -336,10 +438,12 @@ button:active {{
     font-weight:bold;
     line-height:1.5;
 }}
+
 .small {{
     color:#6b3d10;
     font-size:14px;
 }}
+
 .footer-note {{
     margin-top:18px;
     font-size:12px;
@@ -347,6 +451,7 @@ button:active {{
 }}
 </style>
 </head>
+
 <body>
 <div class="card">
 {}
@@ -355,47 +460,59 @@ button:active {{
 </body>
 </html>""".format(SSID, content)
 
+
 # =========================================================
-# WIFI
+# 7. DEMARRAGE DU WIFI
 # =========================================================
 
 def start_wifi():
     ap = network.WLAN(network.AP_IF)
     ap.active(True)
+
     ap.config(
         essid=SSID,
         authmode=0,
         channel=6,
         max_clients=MAX_CLIENTS
     )
+
     print("AP READY:", ap.ifconfig())
     print("WiFi:", SSID)
+
     return ap
 
+
 # =========================================================
-# DNS CAPTIVE PORTAL
+# 8. DNS CAPTIVE PORTAL
 # =========================================================
 
 def start_dns():
     dns_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     dns_socket.bind(("0.0.0.0", 53))
     dns_socket.setblocking(False)
+
     return dns_socket
+
 
 def handle_dns(dns_socket):
     try:
         data, addr = dns_socket.recvfrom(512)
+
         response = bytearray(data)
         response[2] |= 0x80
         response[3] |= 0x80
+
         response += b'\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04'
         response += b'\xc0\xa8\x04\x01'
+
         dns_socket.sendto(response, addr)
+
     except:
         pass
 
+
 # =========================================================
-# WEB SERVER
+# 9. SERVEUR WEB
 # =========================================================
 
 def start_web_server():
@@ -404,8 +521,16 @@ def start_web_server():
     server.bind(("", 80))
     server.listen(1)
     server.settimeout(0.5)
+
     print("WEB SERVER READY")
+    print("Open: http://192.168.4.1")
+
     return server
+
+
+# =========================================================
+# 10. LECTURE DE LA REPONSE
+# =========================================================
 
 def get_answer(req):
     if "POST" in req and "a=" in req:
@@ -413,10 +538,17 @@ def get_answer(req):
             return int(req.split("a=")[1].split("&")[0].split(" ")[0])
         except:
             return -1
+
     return -1
+
+
+# =========================================================
+# 11. PAGE QUESTION
+# =========================================================
 
 def render_question_page(game):
     q = game.question
+
     content = """
     <span class="badge">CRÂNE {}</span>
     <h1>{}</h1>
@@ -431,19 +563,29 @@ def render_question_page(game):
         <p>Temps restant : {} secondes</p>
         <p class="small">Erreurs : {}/3</p>
         """.format(game.remaining(), game.errors)
+
     else:
         content += "<form method='POST'>"
+
         for i, answer in enumerate(q["a"]):
             content += '<button name="a" value="{}">{}</button>'.format(i, answer)
+
         content += "</form>"
 
     return content
+
+
+# =========================================================
+# 12. PAGE REPONSE
+# =========================================================
 
 def render_answer_page(game, led, buzzer, answer):
     q = game.question
 
     if game.locked():
+        led.locked()
         buzzer.locked()
+
         return """
         <h1 class="locked">CRÂNE VERROUILLÉ</h1>
         <p>Temps restant : {} secondes</p>
@@ -452,6 +594,7 @@ def render_answer_page(game, led, buzzer, answer):
 
     if answer == q["c"]:
         game.score += 10
+
         content = """
         <span class="badge">MISSION VALIDÉE</span>
         <h1 class="success">Bonne réponse</h1>
@@ -460,12 +603,19 @@ def render_answer_page(game, led, buzzer, answer):
         <p class="small">Score : {} points · Temps : {} secondes</p>
         """.format(q["next"], game.score, game.elapsed())
 
-        led.green()
-        buzzer.correct()
+        if SKULL == 7:
+            led.treasure()
+            buzzer.treasure()
+        else:
+            led.correct()
+            buzzer.correct()
+
         game.reset()
+
         return content
 
     game.wrong()
+
     content = """
     <span class="badge">ESSAI MANQUÉ</span>
     <h1 class="error">Mauvaise réponse</h1>
@@ -473,9 +623,15 @@ def render_answer_page(game, led, buzzer, answer):
     <p class="small">Erreur {}/3</p>
     """.format(game.remaining(), game.errors)
 
-    led.red()
+    led.wrong()
     buzzer.wrong()
+
     return content
+
+
+# =========================================================
+# 13. TRAITEMENT DES CONNEXIONS WEB
+# =========================================================
 
 def handle_client(server, game, led, buzzer):
     try:
@@ -489,7 +645,10 @@ def handle_client(server, game, led, buzzer):
             "connecttest.txt" in req or
             "ncsi.txt" in req
         ):
-            client.send("HTTP/1.1 302 Found\r\nLocation: http://192.168.4.1/\r\n\r\n")
+            client.send(
+                "HTTP/1.1 302 Found\r\n"
+                "Location: http://192.168.4.1/\r\n\r\n"
+            )
             client.close()
             return
 
@@ -498,36 +657,51 @@ def handle_client(server, game, led, buzzer):
             "library/test/success.html" in req
         ):
             client.send(
-                "HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n\r\n"
-                "<html><head><meta http-equiv='refresh' content='0; url=http://192.168.4.1/'></head><body>Redirect</body></html>"
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type:text/html\r\n\r\n"
+                "<html><head>"
+                "<meta http-equiv='refresh' content='0; url=http://192.168.4.1/'>"
+                "</head><body>Redirect</body></html>"
             )
             client.close()
             return
 
         if "GET / " not in first_line and "POST / " not in first_line:
-            client.send("HTTP/1.1 302 Found\r\nLocation: http://192.168.4.1/\r\n\r\n")
+            client.send(
+                "HTTP/1.1 302 Found\r\n"
+                "Location: http://192.168.4.1/\r\n\r\n"
+            )
             client.close()
             return
 
         if "POST" in req:
+            led.processing()
             answer = get_answer(req)
             content = render_answer_page(game, led, buzzer, answer)
         else:
             content = render_question_page(game)
 
         page = html_page(content)
-        response = "HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n\r\n" + page
+
+        response = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type:text/html\r\n\r\n"
+            + page
+        )
+
         client.send(response)
         client.close()
 
     except OSError:
         pass
 
+
 # =========================================================
-# INITIALISATION
+# 14. INITIALISATION
 # =========================================================
 
 start_wifi()
+
 dns_socket = start_dns()
 web_server = start_web_server()
 
@@ -541,20 +715,23 @@ last_button = 0
 print("SYSTEM READY")
 print("Connectez-vous au WiFi :", SSID)
 
+
 # =========================================================
-# BOUCLE PRINCIPALE
+# 15. BOUCLE PRINCIPALE
 # =========================================================
 
 while True:
+
     handle_dns(dns_socket)
     handle_client(web_server, game, led, buzzer)
 
     if button.value() == 1:
         now = time.time()
+
         if now - last_button > 2:
             print("[TACTILE RESET]")
             game.reset()
-            led.blue()
+            led.reset_animation()
             buzzer.reset()
             last_button = now
 
